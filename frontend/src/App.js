@@ -95,6 +95,18 @@ const relatedTheme = {
   Tornado: "Thunderstorm",
 };
 
+const parseAxiosError = (error, fallbackMessage) => {
+  if (axios.isAxiosError(error)) {
+    if (error.response?.data?.error) {
+      return error.response.data.error;
+    }
+    if (typeof error.message === "string" && error.message.trim()) {
+      return error.message;
+    }
+  }
+  return fallbackMessage;
+};
+
 function Loader({ label }) {
   return (
     <div className="loader" role="status" aria-live="polite">
@@ -172,9 +184,10 @@ export default function App() {
     } catch (err) {
       console.error("Weather request failed", err);
       setStatus((prev) => ({ ...prev, weather: "error" }));
-      const message =
-        err.response?.data?.error ||
-        "No pudimos obtener el clima ahora mismo. Intenta nuevamente en unos segundos.";
+      const message = parseAxiosError(
+        err,
+        "No pudimos obtener el clima ahora mismo. Intenta nuevamente en unos segundos."
+      );
       setErrors((prev) => ({
         ...prev,
         weather: message,
@@ -215,8 +228,8 @@ export default function App() {
       .post("/api/mood", payload)
       .then(({ data }) => {
         if (cancelled) return;
-        const message = data?.message || data?.text || "";
-        setMood(message.trim());
+        const message = (data?.message || data?.text || "").trim();
+        setMood(message);
         setStatus((prev) => ({ ...prev, mood: "success" }));
       })
       .catch((error) => {
@@ -226,9 +239,10 @@ export default function App() {
         setStatus((prev) => ({ ...prev, mood: "error" }));
         setErrors((prev) => ({
           ...prev,
-          mood:
-            error.response?.data?.error ||
-            "No pudimos generar una frase emocional. Reintenta más tarde.",
+          mood: parseAxiosError(
+            error,
+            "No pudimos generar una frase emocional. Reintenta más tarde."
+          ),
         }));
       });
 
@@ -262,9 +276,10 @@ export default function App() {
         setStatus((prev) => ({ ...prev, music: "error" }));
         setErrors((prev) => ({
           ...prev,
-          music:
-            error.response?.data?.error ||
-            "Tuvimos problemas al buscar música. Intenta otra vez.",
+          music: parseAxiosError(
+            error,
+            "Tuvimos problemas al buscar música. Intenta otra vez."
+          ),
         }));
       });
 

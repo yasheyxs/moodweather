@@ -1,7 +1,7 @@
-const express = require("express");
-const axios = require("axios");
-const cors = require("cors");
-const dotenv = require("dotenv");
+import express from "express";
+import axios from "axios";
+import cors from "cors";
+import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -9,8 +9,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
-const HF_TOKEN = process.env.HF_TOKEN;
-const SOUNDCLOUD_CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID;
+const HF_TOKEN =
+  process.env.HF_TOKEN || "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";
+const SOUNDCLOUD_CLIENT_ID =
+  process.env.SOUNDCLOUD_CLIENT_ID || "2t9loNQH90kzJcsFCODdigxfp325aq4z";
 
 app.use(cors());
 app.use(express.json());
@@ -103,7 +105,8 @@ async function generateMood(prompt, retries = 2) {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const { data } = await axios.post(
-        "https://api-inference.huggingface.co/models/gpt2",
+        "https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct",
+
         payload,
         {
           headers: {
