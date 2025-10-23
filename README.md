@@ -5,6 +5,8 @@ Combina datos meteorológicos, generación de textos con IA y recomendaciones mu
 
 > Una fusión entre tecnología, arte y emoción — desarrollada con enfoque full-stack, buenas prácticas y diseño centrado en el usuario.
 
+![2025-10-2316-56-39online-video-cutter com-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/651ec104-3ce3-43d4-b152-bc0055a84a19)
+
 ---
 
 - **Producto completo y escalable:** SPA en React con backend Express, arquitectura clara y lógica desacoplada.
