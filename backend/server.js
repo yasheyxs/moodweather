@@ -9,7 +9,9 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
-const HF_TOKEN = process.env.HUGGINGFACE_API_KEY;
+const OPENROUTER_TOKEN =
+  process.env.OPENROUTER_API_KEY ||
+  "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";
 
 const SOUNDCLOUD_CLIENT_ID =
   process.env.SOUNDCLOUD_CLIENT_ID || "2t9loNQH90kzJcsFCODdigxfp325aq4z";
@@ -89,39 +91,49 @@ app.get("/api/weather", async (req, res) => {
 const DEFAULT_MOOD_MESSAGE =
   "El clima invita a disfrutar de un momento de calma.";
 
-async function callHuggingFace(model, payload, attempt = 0, maxAttempts = 3) {
-  const url = `https://api-inference.huggingface.co/models/${model}`;
+async function callOpenRouter(payload, attempt = 0, maxAttempts = 3) {
+  const url = "https://openrouter.ai/api/v1/chat/completions";
 
   try {
     const response = await axios.post(url, payload, {
       headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
+        Authorization: `Bearer ${OPENROUTER_TOKEN}`,
         "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "MoodWeather",
       },
       timeout: 20000,
     });
 
     const { status, data } = response;
-    const preview =
-      typeof data === "string"
-        ? data.slice(0, 120)
-        : JSON.stringify(data).slice(0, 200);
-    console.log(`[HF] POST ${url} -> ${status}`, preview);
+    const preview = JSON.stringify(data).slice(0, 200);
+    console.log(`[OpenRouter] POST ${url} -> ${status}`, preview);
 
-    if (Array.isArray(data)) {
-      const text = data[0]?.generated_text ?? data[0]?.text;
-      if (text) {
-        return text.trim();
-      }
-    }
-
-    if (typeof data === "object" && data !== null) {
-      if (data.generated_text) {
-        return data.generated_text.trim();
-      }
-      if (data.text) {
-        return data.text.trim();
-      }
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return (
+        text
+          // elimina variantes de etiquetas tipo <s>, </s>, <inst>, etc.
+          .replace(/<\/*[a-z0-9_:-]+>/gi, "")
+          // elimina tokens tipo [BOS], [EOS], [INST], [/INST], [B_INST]
+          .replace(/\[\/?[A-Z_]+\]/gi, "")
+          // elimina barras ||| y similares
+          .replace(/\|{2,}/g, " ")
+          // elimina comillas simples, dobles o tipográficas al inicio y fin
+          .replace(/^["'“”]+|["'“”]+$/g, "")
+          // elimina emojis comunes
+          .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "")
+          // limpia espacios o comillas residuales
+          .replace(/^[\s<>"'“”]+|[\s>"'“”]+$/g, "")
+          // colapsa espacios múltiples
+          .replace(/\s{2,}/g, " ")
+          // elimina puntuación sobrante al principio o final
+          .replace(/^\p{P}+|\p{P}+$/gu, "")
+          // trim final
+          .trim()
+          // capitaliza la primera letra
+          .replace(/^([a-zñáéíóú])/u, (m) => m.toUpperCase())
+      );
     }
 
     return DEFAULT_MOOD_MESSAGE;
@@ -129,17 +141,15 @@ async function callHuggingFace(model, payload, attempt = 0, maxAttempts = 3) {
     const status = error.response?.status;
     const responseData = error.response?.data;
     console.error(
-      `[HF] Error ${url} -> ${status ?? "unknown"}`,
+      `[OpenRouter] Error ${url} -> ${status ?? "unknown"}`,
       responseData || error.message
     );
 
-    if (status === 503 && attempt + 1 < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      return callHuggingFace(model, payload, attempt + 1, maxAttempts);
-    }
-
-    if (status === 404) {
-      throw new Error("model_not_found");
+    if (status === 429 || status === 503) {
+      if (attempt + 1 < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return callOpenRouter(payload, attempt + 1, maxAttempts);
+      }
     }
 
     throw error;
@@ -147,42 +157,27 @@ async function callHuggingFace(model, payload, attempt = 0, maxAttempts = 3) {
 }
 
 async function generateMood(prompt) {
-  ensureKey(HF_TOKEN, "HuggingFace");
+  ensureKey(OPENROUTER_TOKEN, "OpenRouter");
 
   const payload = {
-    inputs: prompt,
-    parameters: {
-      max_new_tokens: 60,
-      temperature: 0.85,
-      top_p: 0.9,
-      return_full_text: false,
-    },
-    options: {
-      wait_for_model: true,
-    },
+    model: "mistralai/mistral-7b-instruct",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Eres MoodWeather, una IA poética que convierte el clima en mensajes inspiradores en español.",
+      },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 120,
+    temperature: 0.8,
   };
 
-  const models = [
-    "microsoft/Phi-3-mini-4k-instruct",
-    "mistralai/Mistral-7B-Instruct-v0.2",
-  ];
-
-  for (const model of models) {
-    try {
-      const text = await callHuggingFace(model, payload);
-      if (text) {
-        return text;
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message === "model_not_found") {
-        continue;
-      }
-      // Otros errores continúan con el siguiente modelo
-      continue;
-    }
+  try {
+    return await callOpenRouter(payload);
+  } catch (error) {
+    return DEFAULT_MOOD_MESSAGE;
   }
-
-  return DEFAULT_MOOD_MESSAGE;
 }
 
 app.post("/api/mood", async (req, res) => {
@@ -243,14 +238,6 @@ function buildFallbackKeywords(weather, mood, city) {
 }
 
 async function generateMusicKeywords({ weather, mood, city }) {
-  try {
-    ensureKey(HF_TOKEN, "HuggingFace");
-  } catch (error) {
-    const err = new Error("missing_hf_token");
-    err.original = error;
-    throw err;
-  }
-
   const climate = weather ? weather.toLowerCase() : "";
   const feeling = mood ? mood.toLowerCase() : "";
   const place = city ? `in ${city}` : "";
@@ -261,24 +248,23 @@ Mood description: ${feeling || "balanced"}.
 Location hint: ${place || ""}.
 Reply with a single lowercase line of 3 to 6 English keywords suitable for searching relaxing but fitting music on SoundCloud. Separate the keywords with spaces only, no punctuation, lists or explanations.`;
 
-  const payload = {
-    inputs: prompt,
-    parameters: {
-      max_new_tokens: 32,
-      temperature: 0.8,
-      top_p: 0.9,
-      return_full_text: false,
-    },
-    options: {
-      wait_for_model: true,
-    },
-  };
-
   try {
-    const raw = await callHuggingFace(
-      "microsoft/Phi-3-mini-4k-instruct",
-      payload
-    );
+    const payload = {
+      model: "mistralai/mistral-7b-instruct",
+
+      messages: [
+        {
+          role: "system",
+          content:
+            "You generate concise lowercase SoundCloud search keywords (3-6 words) for relaxing yet fitting music.",
+        },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 60,
+      temperature: 0.8,
+    };
+
+    const raw = await callOpenRouter(payload);
 
     if (!raw) {
       return buildFallbackKeywords(weather, mood, city);
@@ -329,13 +315,7 @@ app.get("/api/music", async (req, res) => {
   try {
     searchTerms = await generateMusicKeywords({ weather, mood, city });
   } catch (error) {
-    if (error instanceof Error && error.message === "missing_hf_token") {
-      console.warn(
-        "HuggingFace token missing, falling back to static keywords"
-      );
-    } else {
-      console.error("Keyword generation error", error);
-    }
+    console.error("Keyword generation error", error);
   }
 
   const params = {
