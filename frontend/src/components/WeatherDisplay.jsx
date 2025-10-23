@@ -196,9 +196,17 @@ export default function WeatherDisplay() {
         const derivedMood =
           THEME_ALIASES[mainCondition] || mainCondition || "Default";
 
+        const musicParams = { mood: derivedMood };
+        if (mainCondition) {
+          musicParams.weather = mainCondition;
+        }
+        if (nextLocation.name) {
+          musicParams.city = nextLocation.name;
+        }
+
         const [quoteResponse, musicResponse] = await Promise.all([
           api.get("/ai-quote", { params: { mood: derivedMood } }),
-          api.get("/music", { params: { mood: derivedMood } }),
+          api.get("/music", { params: musicParams }),
         ]);
 
         setQuote(quoteResponse.data);
@@ -466,6 +474,9 @@ export default function WeatherDisplay() {
                     </a>
                   )}
                 </div>
+                {music.note && (
+                  <p className="panel__message music__note">{music.note}</p>
+                )}
               </>
             ) : (
               <Loader text="Seleccionando música" />

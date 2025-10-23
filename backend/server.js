@@ -91,6 +91,45 @@ app.get("/api/weather", async (req, res) => {
 const DEFAULT_MOOD_MESSAGE =
   "El clima invita a disfrutar de un momento de calma.";
 
+function cleanModelOutput(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+
+  const UNWANTED_TOKEN_PATTERN =
+    /(?:<\/?s>|<\|(?:im_[a-z]+|startoftext|endoftext)\|>|\[\/?B?_?INST\]|\[(?:BOS|EOS)\]|#{2,}|\|{2,}|```)/gi;
+  const EDGE_QUOTES_PATTERN = /^[`'"“”‘’\s]+|[`'"“”‘’\s]+$/g;
+
+  let cleaned = text
+    .replace(UNWANTED_TOKEN_PATTERN, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([,.;:!?])(?!\s|$)/g, "$1 ")
+    .replace(/\s+/g, " ")
+    .replace(EDGE_QUOTES_PATTERN, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  cleaned = cleaned.replace(/\s+([,.;:!?])/g, "$1");
+  cleaned = cleaned.replace(/([,.;:!?])(?!\s|$)/g, "$1 ");
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const firstLetterIndex = cleaned.search(/[A-Za-zÀ-ÖØ-öø-ÿÑñ]/);
+  if (firstLetterIndex >= 0) {
+    cleaned =
+      cleaned.slice(0, firstLetterIndex) +
+      cleaned.charAt(firstLetterIndex).toUpperCase() +
+      cleaned.slice(firstLetterIndex + 1);
+  }
+
+  return cleaned;
+}
+
 async function callOpenRouter(payload, attempt = 0, maxAttempts = 3) {
   const url = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -110,33 +149,12 @@ async function callOpenRouter(payload, attempt = 0, maxAttempts = 3) {
     console.log(`[OpenRouter] POST ${url} -> ${status}`, preview);
 
     const text = data?.choices?.[0]?.message?.content;
-    if (typeof text === "string" && text.trim().length > 0) {
-      return (
-        text
-          // elimina variantes de etiquetas tipo <s>, </s>, <inst>, etc.
-          .replace(/<\/*[a-z0-9_:-]+>/gi, "")
-          // elimina tokens tipo [BOS], [EOS], [INST], [/INST], [B_INST]
-          .replace(/\[\/?[A-Z_]+\]/gi, "")
-          // elimina barras ||| y similares
-          .replace(/\|{2,}/g, " ")
-          // elimina comillas simples, dobles o tipográficas al inicio y fin
-          .replace(/^["'“”]+|["'“”]+$/g, "")
-          // elimina emojis comunes
-          .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "")
-          // limpia espacios o comillas residuales
-          .replace(/^[\s<>"'“”]+|[\s>"'“”]+$/g, "")
-          // colapsa espacios múltiples
-          .replace(/\s{2,}/g, " ")
-          // elimina puntuación sobrante al principio o final
-          .replace(/^\p{P}+|\p{P}+$/gu, "")
-          // trim final
-          .trim()
-          // capitaliza la primera letra
-          .replace(/^([a-zñáéíóú])/u, (m) => m.toUpperCase())
-      );
+
+    if (typeof text === "string") {
+      return text.trim();
     }
 
-    return DEFAULT_MOOD_MESSAGE;
+    return "";
   } catch (error) {
     const status = error.response?.status;
     const responseData = error.response?.data;
@@ -174,7 +192,9 @@ async function generateMood(prompt) {
   };
 
   try {
-    return await callOpenRouter(payload);
+    const raw = await callOpenRouter(payload);
+    const cleaned = cleanModelOutput(raw);
+    return cleaned || DEFAULT_MOOD_MESSAGE;
   } catch (error) {
     return DEFAULT_MOOD_MESSAGE;
   }
@@ -226,7 +246,9 @@ const DEFAULT_TRACK = {
   title: "Lo-Fi Beats",
   artist: "Chillhop Music",
   artwork_url: null,
+  artwork: null,
   permalink_url: "https://soundcloud.com/chillhopdotcom/lofi-beats",
+  url: "https://soundcloud.com/chillhopdotcom/lofi-beats",
 };
 
 function buildFallbackKeywords(weather, mood, city) {
@@ -265,25 +287,26 @@ Reply with a single lowercase line of 3 to 6 English keywords suitable for searc
     };
 
     const raw = await callOpenRouter(payload);
-
-    if (!raw) {
-      return buildFallbackKeywords(weather, mood, city);
-    }
-
-    const keywords = raw
-      .toLowerCase()
+    const cleaned = cleanModelOutput(raw).toLowerCase();
+    const normalised = cleaned
       .replace(/[\r\n]+/g, " ")
       .replace(/[,;:.]+/g, " ")
       .replace(/[^a-z0-9#&\-\s]/g, " ")
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 6);
+      .replace(/\s+/g, " ")
+      .trim();
 
-    if (!keywords.length) {
+    if (!normalised) {
       return buildFallbackKeywords(weather, mood, city);
     }
 
-    return keywords.join(" ");
+    const keywords = normalised.split(/\s+/).slice(0, 6);
+    const searchTerms = keywords.join(" ").trim();
+
+    if (!searchTerms) {
+      return buildFallbackKeywords(weather, mood, city);
+    }
+
+    return searchTerms;
   } catch (error) {
     console.error("Failed to generate music keywords", error.message);
     return buildFallbackKeywords(weather, mood, city);
@@ -355,14 +378,17 @@ app.get("/api/music", async (req, res) => {
     const track =
       playableTracks[Math.floor(Math.random() * playableTracks.length)];
 
+    const artwork = normaliseArtwork(
+      track.artwork_url || track.user?.avatar_url
+    );
     const suggestion = {
       id: track.id,
       title: track.title,
       artist: track.user?.username ?? "Artista desconocido",
-      artwork_url: normaliseArtwork(
-        track.artwork_url || track.user?.avatar_url
-      ),
+      artwork_url: artwork,
+      artwork,
       permalink_url: track.permalink_url,
+      url: track.permalink_url,
     };
 
     res.json({ track: suggestion });
@@ -372,11 +398,15 @@ app.get("/api/music", async (req, res) => {
       `[SoundCloud] Error -> ${status ?? "unknown"}`,
       error.response?.data || error.message
     );
-    if (status === 401) {
+    if (status === 401 || status === 403) {
+      const note =
+        status === 401
+          ? "Tu clave de SoundCloud parece inválida. Revisa la configuración."
+          : "SoundCloud rechazó la solicitud (403). Verifica los permisos o la cuota de tu clave.";
       return res.json({
         track: {
           ...DEFAULT_TRACK,
-          note: "Tu clave de SoundCloud parece inválida. Revisa la configuración.",
+          note,
         },
       });
     }
@@ -387,3 +417,5 @@ app.get("/api/music", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`MoodWeather API lista en el puerto ${PORT}`);
 });
+
+export { cleanModelOutput };
