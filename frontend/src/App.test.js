@@ -55,7 +55,7 @@ beforeEach(() => {
 test("renderiza el título principal", async () => {
   render(<App />);
   const heading = await screen.findByRole("heading", {
-    name: /el clima que inspira tu mood/i,
+    name: /clima, emociones y música sincronizados/i,
   });
 
   expect(heading).toBeInTheDocument();

@@ -85,6 +85,27 @@ function cleanModelOutput(text) {
     .trim();
 }
 
+function limitSentences(text, { min = 2, max = 3 } = {}) {
+  if (typeof text !== "string") return "";
+
+  const sanitized = text.replace(/\s+/g, " ").trim();
+  if (!sanitized) return "";
+
+  const sentences = sanitized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  if (!sentences.length) return sanitized;
+
+  const desired = Math.min(
+    sentences.length,
+    Math.max(min, Math.min(max, sentences.length))
+  );
+
+  return sentences.slice(0, desired).join(" ");
+}
+
 // Detección de recomendación
 function extractRecommendation(message) {
   if (typeof message !== "string" || !message.trim()) return null;
@@ -104,10 +125,27 @@ function extractRecommendation(message) {
       if (song) {
         const query = artist ? `${song} ${artist}` : song;
         return { query, type: "track" };
+        return { query, title: song, artist: artist || null, type: "track" };
       }
     }
   }
   return null;
+}
+
+function normalize(text) {
+  return (text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesAllWords(text, words) {
+  if (!words.length) return false;
+  const normalizedText = normalize(text);
+  return words.every((word) => normalizedText.includes(word));
 }
 
 // Llamada a OpenRouter
@@ -139,19 +177,30 @@ async function generateMood(prompt) {
     messages: [
       {
         role: "system",
-        content:
-          "Eres MoodWeather, una IA poética que convierte el clima en mensajes breves e inspiradores en español. Incluye ocasionalmente una recomendación musical realista.",
+        content: `
+Eres MoodWeather, una IA poética que transforma el clima en mensajes breves e inspiradores en español.
+
+Tu respuesta SIEMPRE debe incluir:
+  1. Una descripción poética del clima y cómo podría influir en el estado de ánimo.  
+  2. Una recomendación musical CLARA, mencionando *exactamente* una canción y su artista, en formato:
+  "‘Título de la canción’ de [Artista]"  
+  3. Nunca inventes artistas inexistentes ni omitas el título de la canción.
+  4. Si el clima o contexto no inspira nada específico, elige una canción real reconocida (de Spotify), apropiada al tono general (ej. “Here Comes the Sun” de The Beatles para un día soleado).
+  5. Tu respuesta debe sonar natural y humana, con máximo 3 frases.
+        `,
       },
       { role: "user", content: prompt },
     ],
-    max_tokens: 120,
-    temperature: 0.8,
+    max_tokens: 160,
+    temperature: 0.85,
   };
 
   const raw = await callOpenRouter(payload);
+  const cleaned = cleanModelOutput(raw);
+  const limited = limitSentences(cleaned);
   return (
-    cleanModelOutput(raw) ||
-    "El clima invita a disfrutar de un momento de calma."
+    limited ||
+    "El clima invita a disfrutar de un momento de calma. 'Mediterráneo' de Joan Manuel Serrat sería un refugio perfecto para hoy."
   );
 }
 
@@ -184,24 +233,81 @@ async function getSpotifyToken() {
   return spotifyToken;
 }
 
-// Búsqueda en Spotify
-async function searchSpotifyTrack(query) {
+// Búsqueda en Spotify con fallback por artista
+async function searchSpotifyTrack({ query, title, artist }) {
   const token = await getSpotifyToken();
+
+  // Buscar la canción exacta primero
   const { data } = await axios.get("https://api.spotify.com/v1/search", {
-    params: { q: query, type: "track", limit: 3, market: "ES" },
+    params: { q: query, type: "track", limit: 5, market: "ES" },
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (!data.tracks.items.length) return null;
+  const tracks = data?.tracks?.items || [];
+  if (tracks.length) {
+    const queryWords = normalize(query).split(" ").filter(Boolean);
+    const titleWords = normalize(title).split(" ").filter(Boolean);
+    const artistWords = normalize(artist).split(" ").filter(Boolean);
 
-  // Prioriza coincidencia exacta entre nombre y artista
-  const lowerQuery = query.toLowerCase();
-  const exact = data.tracks.items.find(
-    (t) =>
-      lowerQuery.includes(t.name.toLowerCase()) ||
-      t.artists.some((a) => lowerQuery.includes(a.name.toLowerCase()))
-  );
-  return exact || data.tracks.items[0];
+    const matchByBoth = tracks.find((track) => {
+      if (!titleWords.length || !artistWords.length) return false;
+      const titleMatch = includesAllWords(track.name, titleWords);
+      const artistMatch = track.artists.some((candidate) =>
+        includesAllWords(candidate.name, artistWords)
+      );
+      return titleMatch && artistMatch;
+    });
+
+    if (matchByBoth) return matchByBoth;
+
+    const matchByTitle = titleWords.length
+      ? tracks.find((track) => includesAllWords(track.name, titleWords))
+      : null;
+    if (matchByTitle) return matchByTitle;
+
+    const matchByArtist = artistWords.length
+      ? tracks.find((track) =>
+          track.artists.some((candidate) =>
+            includesAllWords(candidate.name, artistWords)
+          )
+        )
+      : null;
+    if (matchByArtist) return matchByArtist;
+  }
+
+  // Si no se encontró la canción, buscar otra del mismo artista
+  if (artist) {
+    try {
+      const { data: artistData } = await axios.get(
+        "https://api.spotify.com/v1/search",
+        {
+          params: { q: artist, type: "artist", limit: 1, market: "ES" },
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      const artistId = artistData?.artists?.items?.[0]?.id;
+      if (artistId) {
+        const { data: topTracks } = await axios.get(
+          `https://api.spotify.com/v1/artists/${artistId}/top-tracks`,
+          {
+            params: { market: "ES" },
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        if (topTracks?.tracks?.length) {
+          // Elegimos la primera canción popular del artista
+          return topTracks.tracks[0];
+        }
+      }
+    } catch (err) {
+      console.error("Error al buscar canciones del artista:", err.message);
+    }
+  }
+
+  // Fallback global
+  return null;
 }
 
 // Endpoint principal de Mood
@@ -226,7 +332,7 @@ y si lo consideras apropiado, sugiere una canción o artista musical.`;
   try {
     let track = null;
     if (recommendation) {
-      const result = await searchSpotifyTrack(recommendation.query);
+      const result = await searchSpotifyTrack(recommendation);
       if (result) {
         track = {
           id: result.id,

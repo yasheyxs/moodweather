@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import WeatherVisual from "./components/WeatherVisual";
 import "./App.css";
@@ -117,7 +117,33 @@ function Loader({ label }) {
 }
 
 const DEFAULT_MOOD_MESSAGE =
-  "El clima invita a disfrutar de un momento de calma.";
+  "El clima invita a disfrutar de un momento de calma. Regalate una pausa para respirar y dejar que la brisa renueve tus ideas.";
+
+function limitSentences(text, { min = 2, max = 3 } = {}) {
+  if (typeof text !== "string") {
+    return "";
+  }
+
+  const sanitized = text.replace(/\s+/g, " ").trim();
+  if (!sanitized) {
+    return "";
+  }
+
+  const sentences = sanitized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  if (!sentences.length) {
+    return sanitized;
+  }
+
+  const desired = Math.min(
+    sentences.length,
+    Math.max(min, Math.min(max, sentences.length))
+  );
+  return sentences.slice(0, desired).join(" ");
+}
 
 const DEFAULT_SPOTIFY_TRACK = {
   id: "4yugZvBYaoREkJKtbG08Qr",
@@ -146,6 +172,17 @@ export default function App() {
     mood: null,
     music: null,
   });
+
+  const moodRef = useRef(mood);
+
+  useEffect(() => {
+    moodRef.current = mood;
+  }, [mood]);
+
+  const updateMood = useCallback((value) => {
+    setMood(value);
+    moodRef.current = value;
+  }, []);
 
   const condition = weather?.weather?.[0]?.main;
   const theme = useMemo(() => {
@@ -237,7 +274,6 @@ export default function App() {
     const run = async () => {
       setStatus((prev) => ({ ...prev, mood: "loading", music: "loading" }));
       setErrors((prev) => ({ ...prev, mood: null, music: null }));
-      setMood("");
       setTrack(null);
 
       try {
@@ -246,9 +282,18 @@ export default function App() {
         });
         if (cancelled) return;
         const message = (data?.message || "").trim();
-        const fallback = data?.fallback === true || !message;
+        const previousMood = moodRef.current;
+        const limitedMessage = limitSentences(message, { min: 2, max: 3 });
+        const usedFallback = !limitedMessage;
+        const fallback = data?.fallback === true || usedFallback;
 
-        setMood(message || DEFAULT_MOOD_MESSAGE);
+        const fallbackMessage = limitSentences(DEFAULT_MOOD_MESSAGE, {
+          min: 2,
+          max: 3,
+        });
+        const nextMood = limitedMessage || previousMood || fallbackMessage;
+
+        updateMood(nextMood);
         setStatus((prev) => ({
           ...prev,
           mood: fallback ? "fallback" : "success",
@@ -274,7 +319,12 @@ export default function App() {
           return;
         }
         console.error("Mood generation failed", error);
-        setMood(DEFAULT_MOOD_MESSAGE);
+        const previousMood = moodRef.current;
+        const fallbackMessage = limitSentences(DEFAULT_MOOD_MESSAGE, {
+          min: 2,
+          max: 3,
+        });
+        updateMood(previousMood || fallbackMessage);
         setTrack({ ...DEFAULT_SPOTIFY_TRACK });
         setStatus((prev) => ({ ...prev, mood: "error", music: "success" }));
         setErrors((prev) => ({
@@ -292,7 +342,7 @@ export default function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [weather]);
+  }, [weather, updateMood]);
 
   useEffect(() => {
     const cancel = fetchExperience();
@@ -521,23 +571,7 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <div className="music__embed" role="presentation">
-                  <iframe
-                    title={`Spotify: ${track.title}`}
-                    src={
-                      track.embedUrl ||
-                      "https://open.spotify.com/embed/track/4yugZvBYaoREkJKtbG08Qr?utm_source=generator&theme=0"
-                    }
-                    width="100%"
-                    height="100%"
-                    frameBorder="0"
-                    allowtransparency="true"
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    scrolling="no"
-                    loading="lazy"
-                    style={{ backgroundColor: "transparent" }}
-                  />
-                </div>
+
                 {track.note && (
                   <p className="panel__message music__note">{track.note}</p>
                 )}
@@ -555,13 +589,7 @@ export default function App() {
             Datos meteorológicos por OpenWeather · Frases generadas con modelos
             de HuggingFace · Música sugerida vía Spotify.
           </p>
-          <button
-            type="button"
-            className="link-button"
-            onClick={handleRefreshExperience}
-          >
-            Actualizar experiencia
-          </button>
+          <span>Desarrollado por Jazmin Gaido.</span>
         </footer>
       </main>
     </div>
