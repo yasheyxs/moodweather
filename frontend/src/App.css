@@ -376,6 +376,59 @@ h1 {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
 }
 
+.music__player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  padding: 1.75rem 1.5rem;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.01)
+  );
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.music__cover {
+  width: min(100%, 220px);
+  aspect-ratio: 1 / 1;
+  border-radius: 22px;
+  object-fit: cover;
+  display: block;
+  background: rgba(12, 20, 40, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+}
+
+.music__player h3 {
+  margin: 0.5rem 0 0;
+  font-size: 1.2rem;
+  color: var(--text-color);
+}
+
+.music__player p {
+  margin: 0;
+  color: var(--muted-color);
+}
+
+.music__link {
+  margin-top: 0.25rem;
+  color: var(--accent-color);
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 200ms ease;
+}
+
+.music__link:hover {
+  color: #bfd3ff;
+  text-decoration: underline;
+}
+
 .music__title {
   margin: 0;
   font-size: 1.15rem;

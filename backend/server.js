@@ -9,8 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
-const HF_TOKEN =
-  process.env.HF_TOKEN || "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";
+const HF_TOKEN = process.env.HUGGINGFACE_API_KEY;
+
 const SOUNDCLOUD_CLIENT_ID =
   process.env.SOUNDCLOUD_CLIENT_ID || "2t9loNQH90kzJcsFCODdigxfp325aq4z";
 
@@ -163,8 +163,7 @@ async function generateMood(prompt) {
   };
 
   const models = [
-    "gpt2",
-    "tiiuae/falcon-7b-instruct",
+    "microsoft/Phi-3-mini-4k-instruct",
     "mistralai/Mistral-7B-Instruct-v0.2",
   ];
 
@@ -231,9 +230,79 @@ const DEFAULT_TRACK = {
   id: "default-track",
   title: "Lo-Fi Beats",
   artist: "Chillhop Music",
-  artworkUrl: null,
-  permalinkUrl: "https://soundcloud.com/chillhopdotcom/lofi-beats",
+  artwork_url: null,
+  permalink_url: "https://soundcloud.com/chillhopdotcom/lofi-beats",
 };
+
+function buildFallbackKeywords(weather, mood, city) {
+  const base = [weather, mood, city, "chill", "beats"]
+    .filter(Boolean)
+    .join(" ");
+
+  return base.trim() || "chill instrumental beats";
+}
+
+async function generateMusicKeywords({ weather, mood, city }) {
+  try {
+    ensureKey(HF_TOKEN, "HuggingFace");
+  } catch (error) {
+    const err = new Error("missing_hf_token");
+    err.original = error;
+    throw err;
+  }
+
+  const climate = weather ? weather.toLowerCase() : "";
+  const feeling = mood ? mood.toLowerCase() : "";
+  const place = city ? `in ${city}` : "";
+
+  const prompt = `You are an assistant that crafts SoundCloud music search keywords based on weather and mood.
+Weather description: ${climate || "unknown"}.
+Mood description: ${feeling || "balanced"}.
+Location hint: ${place || ""}.
+Reply with a single lowercase line of 3 to 6 English keywords suitable for searching relaxing but fitting music on SoundCloud. Separate the keywords with spaces only, no punctuation, lists or explanations.`;
+
+  const payload = {
+    inputs: prompt,
+    parameters: {
+      max_new_tokens: 32,
+      temperature: 0.8,
+      top_p: 0.9,
+      return_full_text: false,
+    },
+    options: {
+      wait_for_model: true,
+    },
+  };
+
+  try {
+    const raw = await callHuggingFace(
+      "microsoft/Phi-3-mini-4k-instruct",
+      payload
+    );
+
+    if (!raw) {
+      return buildFallbackKeywords(weather, mood, city);
+    }
+
+    const keywords = raw
+      .toLowerCase()
+      .replace(/[\r\n]+/g, " ")
+      .replace(/[,;:.]+/g, " ")
+      .replace(/[^a-z0-9#&\-\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 6);
+
+    if (!keywords.length) {
+      return buildFallbackKeywords(weather, mood, city);
+    }
+
+    return keywords.join(" ");
+  } catch (error) {
+    console.error("Failed to generate music keywords", error.message);
+    return buildFallbackKeywords(weather, mood, city);
+  }
+}
 
 app.get("/api/music", async (req, res) => {
   try {
@@ -255,15 +324,26 @@ app.get("/api/music", async (req, res) => {
       .json({ error: "Indica el tipo de clima para sugerir música." });
   }
 
-  const searchTerms = [weather, mood, city, "chill", "ambient"]
-    .filter(Boolean)
-    .join(" ");
+  let searchTerms = buildFallbackKeywords(weather, mood, city);
+
+  try {
+    searchTerms = await generateMusicKeywords({ weather, mood, city });
+  } catch (error) {
+    if (error instanceof Error && error.message === "missing_hf_token") {
+      console.warn(
+        "HuggingFace token missing, falling back to static keywords"
+      );
+    } else {
+      console.error("Keyword generation error", error);
+    }
+  }
 
   const params = {
     q: searchTerms,
     client_id: SOUNDCLOUD_CLIENT_ID,
-    limit: 8,
+    limit: 20,
     offset: 0,
+    filter: "public",
   };
 
   try {
@@ -279,18 +359,30 @@ app.get("/api/music", async (req, res) => {
     );
     console.log(`[SoundCloud] GET ${url} -> ${status}`, preview);
 
-    const track = data?.collection?.find((item) => item?.kind === "track");
+    const collection = Array.isArray(data?.collection) ? data.collection : [];
+    const playableTracks = collection.filter((item) => {
+      if (!item || item.kind !== "track") return false;
+      const isPublic = !item.sharing || item.sharing === "public";
+      const isStreamable = item.streamable === true;
+      const isBlocked = item.policy && item.policy.toLowerCase() === "block";
+      return isPublic && isStreamable && !isBlocked;
+    });
 
-    if (!track) {
+    if (!playableTracks.length) {
       return res.json({ track: DEFAULT_TRACK });
     }
+
+    const track =
+      playableTracks[Math.floor(Math.random() * playableTracks.length)];
 
     const suggestion = {
       id: track.id,
       title: track.title,
       artist: track.user?.username ?? "Artista desconocido",
-      artworkUrl: normaliseArtwork(track.artwork_url || track.user?.avatar_url),
-      permalinkUrl: track.permalink_url,
+      artwork_url: normaliseArtwork(
+        track.artwork_url || track.user?.avatar_url
+      ),
+      permalink_url: track.permalink_url,
     };
 
     res.json({ track: suggestion });

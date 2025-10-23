@@ -491,10 +491,10 @@ export default function App() {
             {status.music === "success" && track && (
               <div className="music">
                 <div className="music__meta">
-                  {track.artworkUrl && (
+                  {track.artwork_url && (
                     <img
                       className="music__art"
-                      src={track.artworkUrl}
+                      src={track.artwork_url}
                       alt={`Arte de ${track.title}`}
                     />
                   )}
@@ -509,7 +509,7 @@ export default function App() {
                       {autoPlay ? "Autoplay activado" : "Autoplay en pausa"}
                     </button>
                     <a
-                      href={track.permalinkUrl}
+                      href={track.permalink_url}
                       target="_blank"
                       rel="noreferrer"
                       className="link-button"
@@ -520,14 +520,14 @@ export default function App() {
                 </div>
                 <div className="music__player">
                   <img
-                    src={track.artworkUrl || "/default-cover.jpg"}
+                    src={track.artwork_url || "/default-cover.jpg"}
                     alt={track.title}
                     className="music__cover"
                   />
                   <h3>{track.title}</h3>
                   <p>{track.artist}</p>
                   <a
-                    href={track.permalinkUrl}
+                    href={track.permalink_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="music__link"
