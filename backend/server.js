@@ -100,11 +100,14 @@ function cleanModelOutput(text) {
 
   const UNWANTED_TOKEN_PATTERN =
     /(?:<\/?s>|<\|(?:im_[a-z]+|startoftext|endoftext)\|>|\[\/?B?_?INST\]|\[(?:BOS|EOS)\]|#{2,}|\|{2,}|```)/gi;
+  const BRACKETED_MARKERS_PATTERN =
+    /\[(?:out|start|end|assistant|assistant_reply|system|user|analysis|response|resultado|respuesta)[^\]]*\]/gi;
   const EDGE_QUOTES_PATTERN = /^[`'"“”‘’\s]+|[`'"“”‘’\s]+$/g;
   const EDGE_SYMBOLS_PATTERN = /^[\[\](){}<>]+|[\[\](){}<>]+$/g;
 
   let cleaned = text
     .replace(UNWANTED_TOKEN_PATTERN, " ")
+    .replace(BRACKETED_MARKERS_PATTERN, " ")
     .replace(/\u00a0/g, " ")
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "")
     .replace(/\s+([,.;:!?])/g, "$1")
@@ -119,6 +122,11 @@ function cleanModelOutput(text) {
   cleaned = cleaned.replace(/\s+([,.;:!?])/g, "$1");
   cleaned = cleaned.replace(/([,.;:!?])(?!\s|$)/g, "$1 ");
   cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+  cleaned = cleaned.replace(
+    /^(?:out|start|assistant|response|resultado|salida)[:\-\s]+/i,
+    ""
+  );
 
   cleaned = cleaned.replace(EDGE_SYMBOLS_PATTERN, "");
 
@@ -380,17 +388,25 @@ function buildSpotifyQuery(query, type) {
 }
 
 async function searchSpotifyTrack(query, type) {
+  const builtQuery = buildSpotifyQuery(query, type);
+
+  if (!builtQuery) {
+    return {
+      track: {
+        ...DEFAULT_TRACK,
+        note: "La frase no incluyó una recomendación musical específica. Compartimos nuestra canción predeterminada.",
+      },
+    };
+  }
+
   try {
     const token = await getSpotifyToken();
     const params = {
-      q: buildSpotifyQuery(query, type),
+      q: builtQuery,
       type: "track",
       limit: 1,
+      market: "ES",
     };
-
-    if (!params.q) {
-      return { track: DEFAULT_TRACK };
-    }
 
     const { data } = await axios.get("https://api.spotify.com/v1/search", {
       params,
@@ -402,7 +418,12 @@ async function searchSpotifyTrack(query, type) {
 
     const item = data?.tracks?.items?.[0];
     if (!item) {
-      return { track: DEFAULT_TRACK };
+      return {
+        track: {
+          ...DEFAULT_TRACK,
+          note: "No encontramos coincidencias en Spotify. Te compartimos nuestra canción predeterminada.",
+        },
+      };
     }
 
     const artwork = item.album?.images?.[0]?.url || null;
@@ -422,7 +443,12 @@ async function searchSpotifyTrack(query, type) {
       "Spotify search failed",
       error.response?.data || error.message
     );
-    return { track: DEFAULT_TRACK };
+    return {
+      track: {
+        ...DEFAULT_TRACK,
+        note: "Mostramos la canción predeterminada debido a un problema al conectar con Spotify.",
+      },
+    };
   }
 }
 
