@@ -470,7 +470,7 @@ export default function WeatherDisplay() {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      Escuchar en SoundCloud
+                      Escuchar en Spotify
                     </a>
                   )}
                 </div>

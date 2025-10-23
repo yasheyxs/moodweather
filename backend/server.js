@@ -13,8 +13,10 @@ const OPENROUTER_TOKEN =
   process.env.OPENROUTER_API_KEY ||
   "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";
 
-const SOUNDCLOUD_CLIENT_ID =
-  process.env.SOUNDCLOUD_CLIENT_ID || "2t9loNQH90kzJcsFCODdigxfp325aq4z";
+const SPOTIFY_CLIENT_ID =
+  process.env.SPOTIFY_CLIENT_ID || "7437b15f5aa744f4a709fe90e5ce1603";
+const SPOTIFY_CLIENT_SECRET =
+  process.env.SPOTIFY_CLIENT_SECRET || "3c66b15030eb4c4d829269414e3d05ba";
 
 app.use(cors());
 app.use(express.json());
@@ -99,6 +101,7 @@ function cleanModelOutput(text) {
   const UNWANTED_TOKEN_PATTERN =
     /(?:<\/?s>|<\|(?:im_[a-z]+|startoftext|endoftext)\|>|\[\/?B?_?INST\]|\[(?:BOS|EOS)\]|#{2,}|\|{2,}|```)/gi;
   const EDGE_QUOTES_PATTERN = /^[`'"“”‘’\s]+|[`'"“”‘’\s]+$/g;
+  const EDGE_SYMBOLS_PATTERN = /^[\[\](){}<>]+|[\[\](){}<>]+$/g;
 
   let cleaned = text
     .replace(UNWANTED_TOKEN_PATTERN, " ")
@@ -111,9 +114,13 @@ function cleanModelOutput(text) {
     .replace(/\s+/g, " ")
     .trim();
 
+  cleaned = cleaned.replace(EDGE_SYMBOLS_PATTERN, "");
+
   cleaned = cleaned.replace(/\s+([,.;:!?])/g, "$1");
   cleaned = cleaned.replace(/([,.;:!?])(?!\s|$)/g, "$1 ");
   cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+  cleaned = cleaned.replace(EDGE_SYMBOLS_PATTERN, "");
 
   if (!cleaned) {
     return "";
@@ -128,6 +135,61 @@ function cleanModelOutput(text) {
   }
 
   return cleaned;
+}
+
+function extractRecommendation(message) {
+  if (typeof message !== "string") {
+    return null;
+  }
+
+  const normalised = message.replace(/\s+/g, " ").trim();
+  if (!normalised) {
+    return null;
+  }
+
+  const patterns = [
+    {
+      type: "track",
+      regex:
+        /recomendaci[oó]n(?: musical)?(?: es)?:?\s*["“”']?([^"“”']{3,})["“”']?(?:\s+de\s+([^.,;]+))?/i,
+    },
+    {
+      type: "track",
+      regex:
+        /escucha(?:r)?(?:\s+la)?(?:\s+canci[oó]n|\s+melod[ií]a|\s+pieza)?\s*["“”']?([^"“”']{3,})["“”']?(?:\s+de\s+([^.,;]+))?/i,
+    },
+    {
+      type: "artist",
+      regex:
+        /escucha(?:r)? a ([^.,;\n]+?)(?:\s+(?:para|y|con|porque)|[.,;]|$)/i,
+    },
+    {
+      type: "track",
+      regex:
+        /(tema|canci[oó]n)\s+recomendada:?\s*["“”']?([^"“”']{3,})["“”']?(?:\s+de\s+([^.,;]+))?/i,
+      groups: [2, 3],
+    },
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalised.match(pattern.regex);
+    if (match) {
+      const groupIndexes = pattern.groups || [1, 2];
+      const primary = match[groupIndexes[0]]?.trim();
+      const secondary = match[groupIndexes[1]]?.trim();
+      if (primary) {
+        const query = secondary ? `${primary} ${secondary}` : primary;
+        return { query: query.replace(/\s+/g, " "), type: pattern.type };
+      }
+    }
+  }
+
+  const quoted = normalised.match(/["“”']([^"“”']{3,})["“”']/);
+  if (quoted) {
+    return { query: quoted[1].trim(), type: "track" };
+  }
+
+  return null;
 }
 
 async function callOpenRouter(payload, attempt = 0, maxAttempts = 3) {
@@ -174,7 +236,7 @@ async function callOpenRouter(payload, attempt = 0, maxAttempts = 3) {
   }
 }
 
-async function generateMood(prompt) {
+async function generateMood(prompt, maxAttempts = 2) {
   ensureKey(OPENROUTER_TOKEN, "OpenRouter");
 
   const payload = {
@@ -191,13 +253,28 @@ async function generateMood(prompt) {
     temperature: 0.8,
   };
 
-  try {
-    const raw = await callOpenRouter(payload);
-    const cleaned = cleanModelOutput(raw);
-    return cleaned || DEFAULT_MOOD_MESSAGE;
-  } catch (error) {
-    return DEFAULT_MOOD_MESSAGE;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const raw = await callOpenRouter(payload);
+      const cleaned = cleanModelOutput(raw);
+      if (cleaned) {
+        return { message: cleaned, fallback: false };
+      }
+    } catch (error) {
+      lastError = error;
+      console.error("Mood generation attempt failed", error.message || error);
+    }
   }
+  if (lastError) {
+    console.warn(
+      "Falling back to default mood message after exhausting attempts",
+      lastError.message || lastError
+    );
+  }
+
+  return { message: DEFAULT_MOOD_MESSAGE, fallback: true };
 }
 
 app.post("/api/mood", async (req, res) => {
@@ -228,189 +305,135 @@ ${pieces}
 Escribe una frase breve (máximo 40 palabras) que mezcle emociones, clima y sugerencias musicales suaves.`;
 
   try {
-    const mood = await generateMood(prompt);
-    res.json({ message: mood || DEFAULT_MOOD_MESSAGE });
+    const { message, fallback } = await generateMood(prompt);
+    const recommendation = fallback ? null : extractRecommendation(message);
+    res.json({
+      message: message || DEFAULT_MOOD_MESSAGE,
+      fallback: Boolean(fallback),
+      recommendation,
+    });
   } catch (error) {
     console.error("Mood generation fallback", error);
-    res.json({ message: DEFAULT_MOOD_MESSAGE });
+    res.json({
+      message: DEFAULT_MOOD_MESSAGE,
+      fallback: true,
+      recommendation: null,
+    });
   }
 });
 
-function normaliseArtwork(url) {
-  if (!url) return null;
-  return url.replace("-large", "-t500x500");
-}
-
 const DEFAULT_TRACK = {
-  id: "default-track",
-  title: "Lo-Fi Beats",
-  artist: "Chillhop Music",
-  artwork_url: null,
+  id: "4yugZvBYaoREkJKtbG08Qr",
+  title: "Mediterráneo",
+  artist: "Joan Manuel Serrat",
   artwork: null,
-  permalink_url: "https://soundcloud.com/chillhopdotcom/lofi-beats",
-  url: "https://soundcloud.com/chillhopdotcom/lofi-beats",
+  url: "https://open.spotify.com/track/4yugZvBYaoREkJKtbG08Qr",
+  embedUrl:
+    "https://open.spotify.com/embed/track/4yugZvBYaoREkJKtbG08Qr?utm_source=generator&theme=0",
+  note: "Mostrando la canción predeterminada debido a un inconveniente al buscar en Spotify.",
 };
 
-function buildFallbackKeywords(weather, mood, city) {
-  const base = [weather, mood, city, "chill", "beats"]
-    .filter(Boolean)
-    .join(" ");
+let spotifyToken = null;
+let spotifyTokenExpiresAt = 0;
 
-  return base.trim() || "chill instrumental beats";
+async function getSpotifyToken() {
+  ensureKey(SPOTIFY_CLIENT_ID, "Spotify Client ID");
+  ensureKey(SPOTIFY_CLIENT_SECRET, "Spotify Client Secret");
+
+  const now = Date.now();
+  if (spotifyToken && now < spotifyTokenExpiresAt) {
+    return spotifyToken;
+  }
+
+  const params = new URLSearchParams();
+  params.append("grant_type", "client_credentials");
+
+  const credentials = Buffer.from(
+    `${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`
+  ).toString("base64");
+
+  const { data } = await axios.post(
+    "https://accounts.spotify.com/api/token",
+    params.toString(),
+    {
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      timeout: 10000,
+    }
+  );
+
+  spotifyToken = data.access_token;
+  spotifyTokenExpiresAt = now + Math.max(0, data.expires_in - 60) * 1000;
+  return spotifyToken;
 }
 
-async function generateMusicKeywords({ weather, mood, city }) {
-  const climate = weather ? weather.toLowerCase() : "";
-  const feeling = mood ? mood.toLowerCase() : "";
-  const place = city ? `in ${city}` : "";
+function buildSpotifyQuery(query, type) {
+  if (!query) return "";
+  const trimmed = query.replace(/["“”']/g, "").trim();
+  if (!trimmed) return "";
+  if (type === "artist") {
+    return `artist:${trimmed}`;
+  }
+  return trimmed;
+}
 
-  const prompt = `You are an assistant that crafts SoundCloud music search keywords based on weather and mood.
-Weather description: ${climate || "unknown"}.
-Mood description: ${feeling || "balanced"}.
-Location hint: ${place || ""}.
-Reply with a single lowercase line of 3 to 6 English keywords suitable for searching relaxing but fitting music on SoundCloud. Separate the keywords with spaces only, no punctuation, lists or explanations.`;
-
+async function searchSpotifyTrack(query, type) {
   try {
-    const payload = {
-      model: "mistralai/mistral-7b-instruct",
-
-      messages: [
-        {
-          role: "system",
-          content:
-            "You generate concise lowercase SoundCloud search keywords (3-6 words) for relaxing yet fitting music.",
-        },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: 60,
-      temperature: 0.8,
+    const token = await getSpotifyToken();
+    const params = {
+      q: buildSpotifyQuery(query, type),
+      type: "track",
+      limit: 1,
     };
 
-    const raw = await callOpenRouter(payload);
-    const cleaned = cleanModelOutput(raw).toLowerCase();
-    const normalised = cleaned
-      .replace(/[\r\n]+/g, " ")
-      .replace(/[,;:.]+/g, " ")
-      .replace(/[^a-z0-9#&\-\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!normalised) {
-      return buildFallbackKeywords(weather, mood, city);
+    if (!params.q) {
+      return { track: DEFAULT_TRACK };
     }
 
-    const keywords = normalised.split(/\s+/).slice(0, 6);
-    const searchTerms = keywords.join(" ").trim();
+    const { data } = await axios.get("https://api.spotify.com/v1/search", {
+      params,
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      timeout: 10000,
+    });
 
-    if (!searchTerms) {
-      return buildFallbackKeywords(weather, mood, city);
+    const item = data?.tracks?.items?.[0];
+    if (!item) {
+      return { track: DEFAULT_TRACK };
     }
 
-    return searchTerms;
+    const artwork = item.album?.images?.[0]?.url || null;
+    return {
+      track: {
+        id: item.id,
+        title: item.name,
+        artist: item.artists?.map((artist) => artist.name).join(", ") || "",
+        artwork,
+        url: item.external_urls?.spotify || null,
+        embedUrl: `https://open.spotify.com/embed/track/${item.id}?utm_source=generator&theme=0`,
+        note: null,
+      },
+    };
   } catch (error) {
-    console.error("Failed to generate music keywords", error.message);
-    return buildFallbackKeywords(weather, mood, city);
+    console.error(
+      "Spotify search failed",
+      error.response?.data || error.message
+    );
+    return { track: DEFAULT_TRACK };
   }
 }
 
 app.get("/api/music", async (req, res) => {
   try {
-    ensureKey(SOUNDCLOUD_CLIENT_ID, "SoundCloud");
+    const { query, type } = req.query;
+    const result = await searchSpotifyTrack(query, type);
+    res.json(result);
   } catch (error) {
-    return res.json({
-      track: {
-        ...DEFAULT_TRACK,
-        note: "Configura la clave de SoundCloud para obtener recomendaciones personalizadas.",
-      },
-    });
-  }
-
-  const { weather, mood, city } = req.query;
-
-  if (!weather) {
-    return res
-      .status(400)
-      .json({ error: "Indica el tipo de clima para sugerir música." });
-  }
-
-  let searchTerms = buildFallbackKeywords(weather, mood, city);
-
-  try {
-    searchTerms = await generateMusicKeywords({ weather, mood, city });
-  } catch (error) {
-    console.error("Keyword generation error", error);
-  }
-
-  const params = {
-    q: searchTerms,
-    client_id: SOUNDCLOUD_CLIENT_ID,
-    limit: 20,
-    offset: 0,
-    filter: "public",
-  };
-
-  try {
-    const url = "https://api-v2.soundcloud.com/search/tracks";
-    const response = await axios.get(url, {
-      params,
-      timeout: 15000,
-    });
-    const { status, data } = response;
-    const preview = JSON.stringify(data?.collection?.slice(0, 1) ?? []).slice(
-      0,
-      200
-    );
-    console.log(`[SoundCloud] GET ${url} -> ${status}`, preview);
-
-    const collection = Array.isArray(data?.collection) ? data.collection : [];
-    const playableTracks = collection.filter((item) => {
-      if (!item || item.kind !== "track") return false;
-      const isPublic = !item.sharing || item.sharing === "public";
-      const isStreamable = item.streamable === true;
-      const isBlocked = item.policy && item.policy.toLowerCase() === "block";
-      return isPublic && isStreamable && !isBlocked;
-    });
-
-    if (!playableTracks.length) {
-      return res.json({ track: DEFAULT_TRACK });
-    }
-
-    const track =
-      playableTracks[Math.floor(Math.random() * playableTracks.length)];
-
-    const artwork = normaliseArtwork(
-      track.artwork_url || track.user?.avatar_url
-    );
-    const suggestion = {
-      id: track.id,
-      title: track.title,
-      artist: track.user?.username ?? "Artista desconocido",
-      artwork_url: artwork,
-      artwork,
-      permalink_url: track.permalink_url,
-      url: track.permalink_url,
-    };
-
-    res.json({ track: suggestion });
-  } catch (error) {
-    const status = error.response?.status;
-    console.error(
-      `[SoundCloud] Error -> ${status ?? "unknown"}`,
-      error.response?.data || error.message
-    );
-    if (status === 401 || status === 403) {
-      const note =
-        status === 401
-          ? "Tu clave de SoundCloud parece inválida. Revisa la configuración."
-          : "SoundCloud rechazó la solicitud (403). Verifica los permisos o la cuota de tu clave.";
-      return res.json({
-        track: {
-          ...DEFAULT_TRACK,
-          note,
-        },
-      });
-    }
-    res.json({ track: DEFAULT_TRACK, message: DEFAULT_MOOD_MESSAGE });
+    console.error("Spotify handler error", error);
+    res.json({ track: DEFAULT_TRACK });
   }
 });
 

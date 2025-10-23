@@ -116,12 +116,25 @@ function Loader({ label }) {
   );
 }
 
+const DEFAULT_MOOD_MESSAGE =
+  "El clima invita a disfrutar de un momento de calma.";
+
+const DEFAULT_SPOTIFY_TRACK = {
+  id: "4yugZvBYaoREkJKtbG08Qr",
+  title: "Mediterráneo",
+  artist: "Joan Manuel Serrat",
+  artwork: null,
+  url: "https://open.spotify.com/track/4yugZvBYaoREkJKtbG08Qr",
+  embedUrl:
+    "https://open.spotify.com/embed/track/4yugZvBYaoREkJKtbG08Qr?utm_source=generator&theme=0",
+  note: "Mostramos la canción predeterminada por un inconveniente al conectar con Spotify.",
+};
+
 export default function App() {
   const [query, setQuery] = useState("");
   const [weather, setWeather] = useState(null);
   const [mood, setMood] = useState("");
   const [track, setTrack] = useState(null);
-  const [autoPlay, setAutoPlay] = useState(true);
   const [lastRequest, setLastRequest] = useState(null);
   const [status, setStatus] = useState({
     weather: "idle",
@@ -217,74 +230,91 @@ export default function App() {
       location: weather.name,
     };
 
-    setStatus((prev) => ({ ...prev, mood: "loading", music: "loading" }));
-    setErrors((prev) => ({ ...prev, mood: null, music: null }));
-    setMood("");
-    setTrack(null);
-
     let cancelled = false;
 
-    axios
-      .post("/api/mood", payload)
-      .then(({ data }) => {
+    const controller = new AbortController();
+
+    const run = async () => {
+      setStatus((prev) => ({ ...prev, mood: "loading", music: "loading" }));
+      setErrors((prev) => ({ ...prev, mood: null, music: null }));
+      setMood("");
+      setTrack(null);
+
+      try {
+        const { data } = await axios.post("/api/mood", payload, {
+          signal: controller.signal,
+        });
         if (cancelled) return;
-        const message = (data?.message || data?.text || "").trim();
-        setMood(message);
-        setStatus((prev) => ({ ...prev, mood: "success" }));
-      })
-      .catch((error) => {
+        const message = (data?.message || "").trim();
+        const fallback = data?.fallback === true || !message;
+        const recommendationQuery = data?.recommendation?.query;
+        const recommendationType = data?.recommendation?.type;
+
+        setMood(message || DEFAULT_MOOD_MESSAGE);
+        setStatus((prev) => ({
+          ...prev,
+          mood: fallback ? "fallback" : "success",
+        }));
+        try {
+          const { data: musicData } = await axios.get("/api/music", {
+            params: {
+              query: recommendationQuery,
+              type: recommendationType,
+            },
+            signal: controller.signal,
+          });
+          if (cancelled) return;
+
+          const suggestedTrack = musicData?.track || null;
+          if (suggestedTrack) {
+            setTrack(suggestedTrack);
+          } else {
+            setTrack({ ...DEFAULT_SPOTIFY_TRACK });
+          }
+          setStatus((prev) => ({ ...prev, music: "success" }));
+          setErrors((prev) => ({ ...prev, music: null }));
+        } catch (musicError) {
+          if (cancelled) return;
+          if (axios.isCancel(musicError)) {
+            return;
+          }
+          console.error("Music suggestion failed", musicError);
+          setTrack({ ...DEFAULT_SPOTIFY_TRACK });
+          setStatus((prev) => ({ ...prev, music: "error" }));
+          setErrors((prev) => ({
+            ...prev,
+            music: parseAxiosError(
+              musicError,
+              "Tuvimos problemas al buscar música en Spotify. Mostramos la canción predeterminada."
+            ),
+          }));
+        }
+        if (fallback) {
+          setTrack((current) => current || { ...DEFAULT_SPOTIFY_TRACK });
+        }
+      } catch (error) {
         if (cancelled) return;
+        if (axios.isCancel(error)) {
+          return;
+        }
         console.error("Mood generation failed", error);
-        setMood("");
-        setStatus((prev) => ({ ...prev, mood: "error" }));
+        setMood(DEFAULT_MOOD_MESSAGE);
+        setTrack({ ...DEFAULT_SPOTIFY_TRACK });
+        setStatus((prev) => ({ ...prev, mood: "error", music: "success" }));
         setErrors((prev) => ({
           ...prev,
           mood: parseAxiosError(
             error,
-            "No pudimos generar una frase emocional. Reintenta más tarde."
+            "No pudimos generar una frase emocional. Mostramos nuestro mensaje predeterminado."
           ),
         }));
-      });
+      }
+    };
 
-    axios
-      .get("/api/music", {
-        params: {
-          weather: descriptor.main,
-          mood: descriptor.description,
-          city: weather.name,
-        },
-      })
-      .then(({ data }) => {
-        if (cancelled) return;
-        const suggestedTrack = data?.track || null;
-        if (!suggestedTrack) {
-          setTrack(null);
-          setStatus((prev) => ({ ...prev, music: "error" }));
-          setErrors((prev) => ({
-            ...prev,
-            music: "No encontramos música adecuada ahora mismo.",
-          }));
-          return;
-        }
-        setTrack(suggestedTrack);
-        setStatus((prev) => ({ ...prev, music: "success" }));
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("Music suggestion failed", error);
-        setTrack(null);
-        setStatus((prev) => ({ ...prev, music: "error" }));
-        setErrors((prev) => ({
-          ...prev,
-          music: parseAxiosError(
-            error,
-            "Tuvimos problemas al buscar música. Intenta otra vez."
-          ),
-        }));
-      });
-
+    run();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [weather]);
 
@@ -473,7 +503,7 @@ export default function App() {
             <div className="panel__header">
               <h2>Recomendación musical</h2>
               {status.music === "loading" && (
-                <Loader label="Buscando en SoundCloud" />
+                <Loader label="Buscando en Spotify" />
               )}
               {status.music === "error" && (
                 <button
@@ -485,65 +515,66 @@ export default function App() {
                 </button>
               )}
             </div>
-            {status.music === "error" && errors.music && (
-              <p className="panel__message">{errors.music}</p>
-            )}
-            {status.music === "success" && track && (
+            {errors.music && <p className="panel__message">{errors.music}</p>}
+            {track ? (
               <div className="music">
                 <div className="music__meta">
-                  {track.artwork_url && (
+                  {track.artwork && (
                     <img
                       className="music__art"
-                      src={track.artwork_url}
+                      src={track.artwork}
                       alt={`Arte de ${track.title}`}
+                      loading="lazy"
                     />
                   )}
-                  <p className="music__title">{track.title}</p>
-                  <p className="music__artist">{track.artist}</p>
-                  <div className="music__actions">
-                    <button
-                      type="button"
-                      className="toggle"
-                      onClick={() => setAutoPlay((value) => !value)}
-                    >
-                      {autoPlay ? "Autoplay activado" : "Autoplay en pausa"}
-                    </button>
-                    <a
-                      href={track.permalink_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="link-button"
-                    >
-                      Abrir en SoundCloud
-                    </a>
+
+                  <div className="music__details">
+                    <p className="music__title">{track.title}</p>
+                    {track.artist && (
+                      <p className="music__artist">{track.artist}</p>
+                    )}
+                    {track.url && (
+                      <a
+                        href={track.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="link-button"
+                      >
+                        Abrir en Spotify
+                      </a>
+                    )}
                   </div>
                 </div>
-                <div className="music__player">
-                  <img
-                    src={track.artwork_url || "/default-cover.jpg"}
-                    alt={track.title}
-                    className="music__cover"
+                <div className="music__embed" role="presentation">
+                  <iframe
+                    title={`Spotify: ${track.title}`}
+                    src={
+                      track.embedUrl ||
+                      "https://open.spotify.com/embed/track/4yugZvBYaoREkJKtbG08Qr?utm_source=generator&theme=0"
+                    }
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
                   />
-                  <h3>{track.title}</h3>
-                  <p>{track.artist}</p>
-                  <a
-                    href={track.permalink_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="music__link"
-                  >
-                    🎧 Escuchar en SoundCloud
-                  </a>
                 </div>
+                {track.note && (
+                  <p className="panel__message music__note">{track.note}</p>
+                )}
               </div>
-            )}
+            ) : status.music !== "loading" ? (
+              <p className="panel__message">
+                No encontramos una canción adecuada en este momento.
+              </p>
+            ) : null}
           </div>
         </section>
 
         <footer className="footnote">
           <p>
             Datos meteorológicos por OpenWeather · Frases generadas con modelos
-            de HuggingFace · Música sugerida vía SoundCloud.
+            de HuggingFace · Música sugerida vía Spotify.
           </p>
           <button
             type="button"
