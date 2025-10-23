@@ -519,13 +519,21 @@ export default function App() {
                   </div>
                 </div>
                 <div className="music__player">
-                  <iframe
-                    title="Reproductor de SoundCloud"
-                    allow="autoplay"
-                    src={`https://w.soundcloud.com/player/?url=${encodeURIComponent(
-                      track.permalinkUrl
-                    )}&color=%23ff5500&auto_play=${autoPlay}`}
+                  <img
+                    src={track.artworkUrl || "/default-cover.jpg"}
+                    alt={track.title}
+                    className="music__cover"
                   />
+                  <h3>{track.title}</h3>
+                  <p>{track.artist}</p>
+                  <a
+                    href={track.permalinkUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="music__link"
+                  >
+                    🎧 Escuchar en SoundCloud
+                  </a>
                 </div>
               </div>
             )}

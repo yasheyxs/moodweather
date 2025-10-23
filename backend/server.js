@@ -86,7 +86,67 @@ app.get("/api/weather", async (req, res) => {
   }
 });
 
-async function generateMood(prompt, retries = 2) {
+const DEFAULT_MOOD_MESSAGE =
+  "El clima invita a disfrutar de un momento de calma.";
+
+async function callHuggingFace(model, payload, attempt = 0, maxAttempts = 3) {
+  const url = `https://api-inference.huggingface.co/models/${model}`;
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 20000,
+    });
+
+    const { status, data } = response;
+    const preview =
+      typeof data === "string"
+        ? data.slice(0, 120)
+        : JSON.stringify(data).slice(0, 200);
+    console.log(`[HF] POST ${url} -> ${status}`, preview);
+
+    if (Array.isArray(data)) {
+      const text = data[0]?.generated_text ?? data[0]?.text;
+      if (text) {
+        return text.trim();
+      }
+    }
+
+    if (typeof data === "object" && data !== null) {
+      if (data.generated_text) {
+        return data.generated_text.trim();
+      }
+      if (data.text) {
+        return data.text.trim();
+      }
+    }
+
+    return DEFAULT_MOOD_MESSAGE;
+  } catch (error) {
+    const status = error.response?.status;
+    const responseData = error.response?.data;
+    console.error(
+      `[HF] Error ${url} -> ${status ?? "unknown"}`,
+      responseData || error.message
+    );
+
+    if (status === 503 && attempt + 1 < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return callHuggingFace(model, payload, attempt + 1, maxAttempts);
+    }
+
+    if (status === 404) {
+      throw new Error("model_not_found");
+    }
+
+    throw error;
+  }
+}
+
+async function generateMood(prompt) {
   ensureKey(HF_TOKEN, "HuggingFace");
 
   const payload = {
@@ -102,50 +162,28 @@ async function generateMood(prompt, retries = 2) {
     },
   };
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  const models = [
+    "gpt2",
+    "tiiuae/falcon-7b-instruct",
+    "mistralai/Mistral-7B-Instruct-v0.2",
+  ];
+
+  for (const model of models) {
     try {
-      const { data } = await axios.post(
-        "https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct",
-
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${HF_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 20000,
-        }
-      );
-
-      if (Array.isArray(data)) {
-        const text = data[0]?.generated_text ?? data[0]?.text;
-        if (text) {
-          return text.trim();
-        }
+      const text = await callHuggingFace(model, payload);
+      if (text) {
+        return text;
       }
-
-      if (typeof data === "object" && data !== null) {
-        if (data.generated_text) {
-          return data.generated_text.trim();
-        }
-        if (data.text) {
-          return data.text.trim();
-        }
-      }
-
-      return "El clima invita a disfrutar de un momento de calma.";
     } catch (error) {
-      const status = error.response?.status;
-      if (status === 503 && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+      if (error instanceof Error && error.message === "model_not_found") {
         continue;
       }
-      console.error("HuggingFace error", error.message);
-      throw new Error("No pudimos generar una frase emocional.");
+      // Otros errores continúan con el siguiente modelo
+      continue;
     }
   }
 
-  return "El clima invita a disfrutar de un momento de calma.";
+  return DEFAULT_MOOD_MESSAGE;
 }
 
 app.post("/api/mood", async (req, res) => {
@@ -177,9 +215,10 @@ Escribe una frase breve (máximo 40 palabras) que mezcle emociones, clima y suge
 
   try {
     const mood = await generateMood(prompt);
-    res.json({ message: mood });
+    res.json({ message: mood || DEFAULT_MOOD_MESSAGE });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Mood generation fallback", error);
+    res.json({ message: DEFAULT_MOOD_MESSAGE });
   }
 });
 
@@ -188,11 +227,24 @@ function normaliseArtwork(url) {
   return url.replace("-large", "-t500x500");
 }
 
+const DEFAULT_TRACK = {
+  id: "default-track",
+  title: "Lo-Fi Beats",
+  artist: "Chillhop Music",
+  artworkUrl: null,
+  permalinkUrl: "https://soundcloud.com/chillhopdotcom/lofi-beats",
+};
+
 app.get("/api/music", async (req, res) => {
   try {
     ensureKey(SOUNDCLOUD_CLIENT_ID, "SoundCloud");
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.json({
+      track: {
+        ...DEFAULT_TRACK,
+        note: "Configura la clave de SoundCloud para obtener recomendaciones personalizadas.",
+      },
+    });
   }
 
   const { weather, mood, city } = req.query;
@@ -215,17 +267,22 @@ app.get("/api/music", async (req, res) => {
   };
 
   try {
-    const { data } = await axios.get(
-      "https://api-v2.soundcloud.com/search/tracks",
-      {
-        params,
-      }
+    const url = "https://api-v2.soundcloud.com/search/tracks";
+    const response = await axios.get(url, {
+      params,
+      timeout: 15000,
+    });
+    const { status, data } = response;
+    const preview = JSON.stringify(data?.collection?.slice(0, 1) ?? []).slice(
+      0,
+      200
     );
+    console.log(`[SoundCloud] GET ${url} -> ${status}`, preview);
 
     const track = data?.collection?.find((item) => item?.kind === "track");
 
     if (!track) {
-      return res.json({ track: null });
+      return res.json({ track: DEFAULT_TRACK });
     }
 
     const suggestion = {
@@ -238,14 +295,20 @@ app.get("/api/music", async (req, res) => {
 
     res.json({ track: suggestion });
   } catch (error) {
-    const status = error.response?.status || 500;
+    const status = error.response?.status;
+    console.error(
+      `[SoundCloud] Error -> ${status ?? "unknown"}`,
+      error.response?.data || error.message
+    );
     if (status === 401) {
-      return res.status(500).json({
-        error: "La clave de SoundCloud no es válida. Revisa tu configuración.",
+      return res.json({
+        track: {
+          ...DEFAULT_TRACK,
+          note: "Tu clave de SoundCloud parece inválida. Revisa la configuración.",
+        },
       });
     }
-    console.error("SoundCloud error", error.message);
-    res.status(500).json({ error: "No pudimos obtener una canción adecuada." });
+    res.json({ track: DEFAULT_TRACK, message: DEFAULT_MOOD_MESSAGE });
   }
 });
 
