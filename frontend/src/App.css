@@ -6,11 +6,11 @@
     #121d36 52%,
     #192a4d 100%
   );
-  --surface-color: rgba(12, 20, 40, 0.78);
-  --panel-border: rgba(255, 255, 255, 0.08);
-  --shadow-color: rgba(5, 8, 16, 0.65);
+  --surface-color: rgba(10, 16, 28, 0.82);
+  --panel-border: rgba(143, 180, 255, 0.12);
+  --shadow-color: rgba(5, 9, 18, 0.45);
   --text-color: #f5f7ff;
-  --muted-color: rgba(229, 233, 255, 0.76);
+  --muted-color: rgba(229, 233, 255, 0.78);
   --accent-color: #8fb4ff;
 }
 
@@ -69,11 +69,15 @@ body {
   justify-content: space-between;
   gap: 2rem;
   padding: 2.75rem;
-  background: var(--surface-color);
+  background: linear-gradient(
+    145deg,
+    rgba(9, 14, 26, 0.92) 0%,
+    rgba(12, 19, 35, 0.72) 100%
+  );
   border: 1px solid var(--panel-border);
   border-radius: 28px;
-  box-shadow: 0 18px 36px var(--shadow-color);
-  backdrop-filter: blur(24px);
+  box-shadow: none;
+  backdrop-filter: blur(22px);
 }
 
 .eyebrow {
@@ -126,11 +130,15 @@ h1 {
   flex-direction: column;
   gap: 0.85rem;
   padding: 1.75rem 2.5rem;
-  background: var(--surface-color);
+  background: linear-gradient(
+    160deg,
+    rgba(9, 14, 26, 0.9) 0%,
+    rgba(10, 17, 30, 0.72) 100%
+  );
   border: 1px solid var(--panel-border);
   border-radius: 24px;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(22px);
+  box-shadow: none;
+  backdrop-filter: blur(20px);
 }
 
 .search__label {
@@ -245,15 +253,19 @@ h1 {
 }
 
 .panel__section {
-  background: var(--surface-color);
+  background: linear-gradient(
+    160deg,
+    rgba(9, 14, 26, 0.92) 0%,
+    rgba(12, 20, 36, 0.7) 100%
+  );
   border: 1px solid var(--panel-border);
   border-radius: 24px;
   padding: 2rem;
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
-  backdrop-filter: blur(24px);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(20px);
+  box-shadow: none;
   min-height: 230px;
 }
 
@@ -357,15 +369,11 @@ h1 {
   font-size: 1.1rem;
   line-height: 1.7;
   color: var(--text-color);
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.06),
-    rgba(255, 255, 255, 0.01)
-  );
+  background: rgba(10, 18, 32, 0.75);
   border-left: 3px solid var(--accent-color);
   padding: 1rem 1.25rem;
   border-radius: 16px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: none;
   animation: fade-in 400ms ease forwards;
 }
 
@@ -423,9 +431,9 @@ h1 {
   aspect-ratio: 100 / 40;
   border-radius: 20px;
   overflow: hidden;
-  background: rgba(12, 20, 40, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  background: rgba(9, 14, 26, 0.9);
+  border: 1px solid rgba(143, 180, 255, 0.08);
+  box-shadow: none;
   min-width: 0;
 }
 
@@ -434,6 +442,7 @@ h1 {
   height: 100%;
   border: 0;
   display: block;
+  background: transparent;
 }
 
 .music__note {

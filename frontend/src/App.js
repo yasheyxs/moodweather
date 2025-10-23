@@ -247,71 +247,26 @@ export default function App() {
         if (cancelled) return;
         const message = (data?.message || "").trim();
         const fallback = data?.fallback === true || !message;
-        const recommendationQuery = data?.recommendation?.query;
-        const recommendationType = data?.recommendation?.type;
-        const shouldRequestMusic =
-          Boolean(recommendationQuery && recommendationQuery.trim()) &&
-          !fallback;
-
-        const ensureDefaultTrack = (note, statusValue = "fallback") => {
-          setTrack({ ...DEFAULT_SPOTIFY_TRACK, note });
-          setStatus((prev) => ({ ...prev, music: statusValue }));
-          setErrors((prev) => ({ ...prev, music: null }));
-        };
 
         setMood(message || DEFAULT_MOOD_MESSAGE);
         setStatus((prev) => ({
           ...prev,
           mood: fallback ? "fallback" : "success",
         }));
-        if (shouldRequestMusic) {
-          try {
-            const { data: musicData } = await axios.get("/api/music", {
-              params: {
-                query: recommendationQuery,
-                type: recommendationType,
-              },
-              signal: controller.signal,
-            });
-            if (cancelled) return;
-
-            const suggestedTrack = musicData?.track || null;
-            if (suggestedTrack) {
-              setTrack(suggestedTrack);
-              setStatus((prev) => ({
-                ...prev,
-                music: suggestedTrack.note ? "fallback" : "success",
-              }));
-              setErrors((prev) => ({ ...prev, music: null }));
-            } else {
-              ensureDefaultTrack(
-                "No encontramos una canción adecuada en este momento.",
-                "fallback"
-              );
-            }
-          } catch (musicError) {
-            if (cancelled) return;
-            if (axios.isCancel(musicError)) {
-              return;
-            }
-            console.error("Music suggestion failed", musicError);
-            ensureDefaultTrack(
-              "Tuvimos problemas al buscar música en Spotify. Mostramos la canción predeterminada.",
-              "error"
-            );
-            setErrors((prev) => ({
-              ...prev,
-              music: parseAxiosError(
-                musicError,
-                "Tuvimos problemas al buscar música en Spotify. Mostramos la canción predeterminada."
-              ),
-            }));
-          }
+        if (data?.track) {
+          setTrack(data.track);
+          setStatus((prev) => ({
+            ...prev,
+            music: "success",
+          }));
+          setErrors((prev) => ({ ...prev, music: null }));
         } else {
           const note = fallback
             ? "Mostramos la canción predeterminada mientras generamos una recomendación musical más precisa."
             : "La frase no incluyó una recomendación musical concreta, compartimos nuestra canción predeterminada.";
-          ensureDefaultTrack(note);
+          setTrack({ ...DEFAULT_SPOTIFY_TRACK, note });
+          setStatus((prev) => ({ ...prev, music: "fallback" }));
+          setErrors((prev) => ({ ...prev, music: null }));
         }
       } catch (error) {
         if (cancelled) return;
@@ -576,9 +531,11 @@ export default function App() {
                     width="100%"
                     height="100%"
                     frameBorder="0"
+                    allowtransparency="true"
                     allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
                     scrolling="no"
                     loading="lazy"
+                    style={{ backgroundColor: "transparent" }}
                   />
                 </div>
                 {track.note && (
